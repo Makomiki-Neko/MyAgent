@@ -1,0 +1,13 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "instructions": [
+    "openspec/project.md",
+    "openspec/specs/"
+  ],
+  "permission": {
+    "skill": { "*": "allow" }
+  },
+  "agent": {
+    "plan": { "strictSpec": true }
+  }
+}
