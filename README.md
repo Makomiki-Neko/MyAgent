@@ -1,6 +1,6 @@
 <div align="center">
 
-<img src="./preview.png" width="800">
+<img src="./preview.jpg" width="800">
 
 # 多Agent智能体系统 Multi\-Agent System 
 ## NekoAgent
@@ -51,5 +51,13 @@
 
 ## 🚀 快速启动
 
+```bash
 python -m nekoagent
+```
+
+## 待实现
+- Comfyui 接入
+- TTS 接入
+
+
 
