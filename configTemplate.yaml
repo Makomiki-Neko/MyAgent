@@ -1,0 +1,97 @@
+version: 0.1.0
+llm_profiles:
+  main:
+    base_url: http://localhost:11434/v1
+    api_key_env: OPENAI_API_KEY
+    model: gemma4:e4b
+    temperature: 0.8
+    max_tokens: 8192
+    api_key: None
+  supervisor:
+    base_url: http://localhost:11434/v1
+    api_key_env: OPENAI_API_KEY
+    model: gemma4:e4b
+    temperature: 0.6
+    max_tokens: 4096
+    api_key: None
+  executor:
+    base_url: http://localhost:11434/v1
+    api_key: dummy
+    model: gemma4:e4b
+    temperature: 0.2
+    max_tokens: 4096
+  summary_local:
+    base_url: http://localhost:11434/v1
+    api_key: dummy
+    model: gemma4:e4b
+    temperature: 0.1
+    max_tokens: 4096
+auxiliary_models:
+  summary_llm_profile: summary_local
+  embedding_model_path: E:\\Qwen3_Embedding_0.6B
+  reranker_model_path: E:\\QwenQwen3-Reranker-0.6B
+  embedding_device: cpu
+  reranker_device: cpu
+  rerank_batch_size: 16
+agents:
+  main_agent:
+    llm_profile: main
+    system_prompt_file: ./personas/main.yaml
+    mcp_servers: []
+  supervisor_agent:
+    llm_profile: supervisor
+    system_prompt_file: ./personas/supervisor.yaml
+    mcp_servers: []
+  executor_agent:
+    llm_profile: executor
+    system_prompt_file: ./personas/executor.yaml
+    mcp_servers:
+    - weather
+database:
+  backend: mysql
+  url: mysql+pymysql://root:root@localhost:3306/agent?charset=utf8mb4
+  echo: false
+memory:
+  summarize_token_threshold: 6000
+  suppress_archived_after_summary: true
+  user_memory_namespace: main_user_memory
+  proc_memory_namespace: supervisor_proc
+rag:
+  chroma_persist_dir: ./data/chroma
+  bm25_index_path: ./data/bm25
+  top_k_before_rerank: 20
+  top_k_after_rerank: 5
+  rrf_k: 60
+  similarity_threshold: 0.5
+  inject_when_above_threshold: true
+skills_dir: ./skills
+mcp_servers:
+  weather:
+    transport: stdio
+    command: python
+    args:
+    - -m
+    - mcp_servers.dummy_weather
+    env: {}
+  todo:
+    transport: stdio
+    command: python
+    args:
+    - -m
+    - mcp_servers.dummy_todo
+    env: {}
+output_retry:
+  max_attempts: 3
+  backoff_initial: 0.5
+  backoff_max: 5.0
+task_queue:
+  max_concurrent: 4
+  task_timeout_seconds: 1800
+  poll_interval_seconds: 0.2
+logging:
+  level: INFO
+  file: ./logs/nekoagent.log
+  rotate: true
+  max_bytes: 10485760
+  backup_count: 5
+  expose_stacktrace_to_dev_log: true

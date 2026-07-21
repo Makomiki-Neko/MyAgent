@@ -1,0 +1,39 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "nekoagent"
+version = "0.1.0"
+description = "NekoAgent - 三级多 Agent 用户交互系统 MVP"
+readme = "README.md"
+requires-python = ">=3.10"
+authors = [{ name = "NekoAgent" }]
+dependencies = [
+    "langchain>=0.3.4",
+    "langchain-core>=0.3.15",
+    "langchain-openai>=0.2.0",
+    "langgraph>=0.2.45",
+    "langgraph-checkpoint-mysql>=2.0.0",
+    "langchain-chroma>=0.1.4",
+    "chromadb>=0.5.13",
+    "rank-bm25>=0.2.2",
+    "sentence-transformers>=3.1.1",
+    "jieba>=0.42.1",
+    "flet>=0.24.1",
+    "PyMySQL>=1.1.1",
+    "mcp>=1.0.0",
+    "PyYAML>=6.0.2",
+    "pydantic>=2.9.2",
+    "tenacity>=9.0.0",
+    "numpy>=1.26.4",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8.3", "pytest-asyncio>=0.24"]
+
+[project.scripts]
+nekoagent = "nekoagent.__main__:main"
+
+[tool.setuptools.packages.find]
+include = ["nekoagent*"]

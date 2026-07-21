@@ -1,0 +1,10 @@
+/app/config.yaml
+/data
+.opencode/
+.pytest_cache/
+openspec/
+logs/
+personas/
+vector/
+tests/
+config.yaml
