@@ -120,7 +120,7 @@ def _search_library(lib_name: str, query: str, top_k: int = 5) -> str:
     lines = [f"在 RAG 库「{lib_name}」中找到以下相关内容："]
     for i, (doc_id, text, score) in enumerate(results, 1):
         lines.append(f"\n{i}. (相关度 {score:.3f})\n{text[:500]}")
-    _log.info(f"RAG 检索完成: lib={lib_name} results={len(results)} result={results}")
+    _log.info(f"RAG 检索完成: lib={lib_name} results={len(results)}")
     return "\n".join(lines)
 
 
