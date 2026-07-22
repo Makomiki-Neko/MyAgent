@@ -99,6 +99,17 @@ def build_metadata() -> MetaData:
     )
 
     Table(
+        "hitl_pending",
+        md,
+        Column("id", Integer, primary_key=True, autoincrement=True),
+        Column("session_id", String(64), ForeignKey("session_meta.session_id"), nullable=False, index=True),
+        Column("thread_id", String(128), nullable=False),
+        Column("kind", String(32), nullable=False),           # plan_ready | info_request
+        Column("payload", Text, default=""),                  # JSON 序列化的完整状态
+        Column("created_at", TIMESTAMP, nullable=False),
+    )
+
+    Table(
         "executor_logs",
         md,
         Column("id", Integer, primary_key=True, autoincrement=True),

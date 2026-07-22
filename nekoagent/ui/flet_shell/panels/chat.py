@@ -85,12 +85,20 @@ def build_chat_panel(page: Any, pubsub: Any, get_active_session_id: Callable[[],
             assistant_slot["text"] = text
 
     def _stream_token(token: str):
-        if assistant_slot["text"] == "正在获取主人信息……":
+        try:
+            _pname = get_config().get_persona_cached("main_agent").name
+        except Exception:
+            _pname = ""
+        if assistant_slot["text"] == f"{_pname}正在思考……":
             assistant_slot["text"] = ""
         assistant_slot["text"] += token
         _update_assistant_slot(assistant_slot["text"])
 
     def _send(_e: Any = None) -> None:
+        try:
+            _pname = get_config().get_persona_cached("main_agent").name
+        except Exception:
+            _pname = ""
         text = input_box.value or ""
         if text.endswith("\n") and not text.endswith("\n\n"):
             text = text[:-1]
@@ -99,7 +107,7 @@ def build_chat_panel(page: Any, pubsub: Any, get_active_session_id: Callable[[],
             return
         _append_user(text)
         input_box.value = ""
-        _append_assistant_slot("正在获取主人信息……")
+        _append_assistant_slot(f"{_pname}正在思考……")
         try:
             page.update()
         except Exception:
@@ -275,7 +283,7 @@ def build_chat_panel(page: Any, pubsub: Any, get_active_session_id: Callable[[],
                                             bgcolor=ft.Colors.GREEN_400, color=ft.Colors.WHITE, style=ft.ButtonStyle(shape=ft.RoundedRectangleBorder(radius=10)))
             btn_modify = ft.ElevatedButton("修正", icon=ft.Icons.EDIT, on_click=lambda e: _toggle_mod_row(thread_id),
                                            bgcolor=ft.Colors.ORANGE_400, color=ft.Colors.WHITE, style=ft.ButtonStyle(shape=ft.RoundedRectangleBorder(radius=10)))
-            btn_cancel = ft.ElevatedButton("拒绝", icon=ft.Icons.CANCEL, on_click=lambda e: _make_decision(thread_id, {"action": "cancel"}),
+            btn_cancel = ft.ElevatedButton("取消", icon=ft.Icons.CANCEL, on_click=lambda e: _make_decision(thread_id, {"action": "cancel"}),
                                            bgcolor=ft.Colors.RED_400, color=ft.Colors.WHITE, style=ft.ButtonStyle(shape=ft.RoundedRectangleBorder(radius=10)))
             btn_row = ft.Row(
                 alignment=ft.MainAxisAlignment.CENTER, spacing=12,
@@ -292,7 +300,7 @@ def build_chat_panel(page: Any, pubsub: Any, get_active_session_id: Callable[[],
         try:
             status = payload.get("status", "")
             if status == "error":
-                _append_assistant_slot("处理决策时出现了一些问题，请稍后重试喵~")
+                _append_assistant_slot("处理决策时出现了一些问题，请稍后重试~")
                 page.update()
         except Exception:
             pass
@@ -310,6 +318,7 @@ def build_chat_panel(page: Any, pubsub: Any, get_active_session_id: Callable[[],
 
     # ---- 主管请求用户补充信息 ----
     _info_row_ref = {"row": None, "thread_id": None}
+    _info_btn_row_ref = {"row": None}
     _last_info_question = { "q": "" }
 
     def _on_info_request(payload):
@@ -346,12 +355,12 @@ def build_chat_panel(page: Any, pubsub: Any, get_active_session_id: Callable[[],
                 except Exception:
                     pass
                 _info_row_ref["row"] = None
-            if _btn_row_ref["row"] is not None:
+            if _info_btn_row_ref["row"] is not None:
                 try:
-                    chat_log.controls.remove(_btn_row_ref["row"])
+                    chat_log.controls.remove(_info_btn_row_ref["row"])
                 except Exception:
                     pass
-                _btn_row_ref["row"] = None
+                _info_btn_row_ref["row"] = None
             page.update()
             def _bg_ack():
                 sid = get_active_session_id()
@@ -397,12 +406,12 @@ def build_chat_panel(page: Any, pubsub: Any, get_active_session_id: Callable[[],
                 except Exception:
                     pass
                 _info_row_ref["row"] = None
-            if _btn_row_ref["row"] is not None:
+            if _info_btn_row_ref["row"] is not None:
                 try:
-                    chat_log.controls.remove(_btn_row_ref["row"])
+                    chat_log.controls.remove(_info_btn_row_ref["row"])
                 except Exception:
                     pass
-                _btn_row_ref["row"] = None
+                _info_btn_row_ref["row"] = None
             page.update()
             def _bg_info():
                 sid = get_active_session_id()
@@ -442,6 +451,7 @@ def build_chat_panel(page: Any, pubsub: Any, get_active_session_id: Callable[[],
         btn_cancel = ft.ElevatedButton("取消", icon=ft.Icons.CANCEL, on_click=lambda e: _make_info_decision(thread_id, {"action": "cancel"}),
                                        bgcolor=ft.Colors.RED_400, color=ft.Colors.WHITE, style=ft.ButtonStyle(shape=ft.RoundedRectangleBorder(radius=10)))
         btn_row = ft.Row(alignment=ft.MainAxisAlignment.CENTER, spacing=12, controls=[btn_continue, btn_auto, btn_cancel])
+        _info_btn_row_ref["row"] = btn_row
         chat_log.controls.append(btn_row)
         page.update()
 

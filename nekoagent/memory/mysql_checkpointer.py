@@ -62,6 +62,58 @@ def _migrate_session_meta(engine: Any) -> None:
         pass
 
 
+def save_hitl_pending(session_id: str, thread_id: str, kind: str, payload: dict) -> None:
+    """持久化 HITL 待处理状态到数据库。"""
+    try:
+        from datetime import datetime
+        from nekoagent.memory.schema import get_metadata as _gm
+        import json
+        engine = get_engine()
+        tbl = _gm().tables["hitl_pending"]
+        with engine.begin() as c:
+            c.execute(tbl.insert().values(
+                session_id=session_id, thread_id=thread_id, kind=kind,
+                payload=json.dumps(payload, ensure_ascii=False, default=str),
+                created_at=datetime.utcnow(),
+            ))
+    except Exception:
+        pass
+
+
+def load_hitl_pending(session_id: str) -> list[dict]:
+    """加载指定会话的所有待处理 HITL 状态。"""
+    try:
+        from sqlalchemy import select as _select, desc as _desc
+        import json
+        engine = get_engine()
+        tbl = get_metadata().tables["hitl_pending"]
+        with engine.connect() as c:
+            rs = c.execute(
+                _select(tbl).where(tbl.c.session_id == session_id)
+                .order_by(_desc(tbl.c.created_at))
+            )
+            results = []
+            for r in rs:
+                row = dict(r._mapping)
+                row["payload"] = json.loads(row.get("payload") or "{}")
+                results.append(row)
+            return results
+    except Exception:
+        return []
+
+
+def clear_hitl_pending(thread_id: str) -> None:
+    """清除指定 thread_id 的待处理 HITL 状态（任务完成后）。"""
+    try:
+        from sqlalchemy import delete as _delete
+        engine = get_engine()
+        tbl = get_metadata().tables["hitl_pending"]
+        with engine.begin() as c:
+            c.execute(_delete(tbl).where(tbl.c.thread_id == thread_id))
+    except Exception:
+        pass
+
+
 def ensure_tables(cfg: Config | None = None) -> None:
     """显式触发一次业务表创建 + 迁移。可在 app 启动前调用以便失败时立即报错。"""
 

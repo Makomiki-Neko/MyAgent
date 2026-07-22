@@ -40,6 +40,22 @@ from nekoagent.observability.logging import get_logger
 _log = get_logger("agent.supervisor")
 
 
+def _save_hitl(session_id: str, thread_id: str, kind: str, payload: dict) -> None:
+    try:
+        from nekoagent.memory.mysql_checkpointer import save_hitl_pending
+        save_hitl_pending(session_id, thread_id, kind, payload)
+    except Exception:
+        pass
+
+
+def _clear_hitl(thread_id: str) -> None:
+    try:
+        from nekoagent.memory.mysql_checkpointer import clear_hitl_pending
+        clear_hitl_pending(thread_id)
+    except Exception:
+        pass
+
+
 def _log_supervisor_event(thread_id: str, session_id: str, event: str, detail: str = "") -> None:
     try:
         from datetime import datetime
@@ -166,6 +182,10 @@ class SupervisorAgent:
         except Exception:
             pass
         _log_supervisor_event(thread_id, state.get("session_id", ""), "plan_ready", task_summary[:200])
+        _save_hitl(state.get("session_id", ""), thread_id, "plan_ready", {
+            "task_summary": task_summary, "session_id": state.get("session_id", ""),
+            "plan": str(plan.model_dump() if hasattr(plan, 'model_dump') else plan),
+        })
         self._saved_states[thread_id] = {
             "task_summary": task_summary,
             "session_id": state["session_id"],
@@ -320,6 +340,9 @@ class SupervisorAgent:
                 "stage": "info",
             }
             _log_supervisor_event(state["thread_id"], state.get("session_id", ""), "info_request", info_question[:200])
+            _save_hitl(state.get("session_id", ""), state["thread_id"], "info_request", {
+                "question": info_question, "subtask": current.name,
+            })
             _log.info("[supervisor] 请求用户补充信息 thread_id=%s subtask=%s", state["thread_id"], current.name)
             if self._on_info_request is not None:
                 try:
@@ -432,10 +455,12 @@ class SupervisorAgent:
             runnable.invoke(initial, config={"configurable": {"thread_id": thread_id}})
         except HITLAbortedError as exc:
             _log_supervisor_event(thread_id, session_id, "cancel", exc.friendly_message[:200])
+            _clear_hitl(thread_id)
             _log.info("[supervisor] 任务被取消 thread_id=%s：%s", thread_id, exc.friendly_message)
             return thread_id
         except NekoAgentError:
             raise
+        _clear_hitl(thread_id)
         _log_supervisor_event(thread_id, session_id, "complete", task_summary[:200])
         return thread_id
 
@@ -448,6 +473,7 @@ class SupervisorAgent:
 
         if action == "cancel":
             _log.info("[supervisor] 任务已取消 thread_id=%s", thread_id)
+            _clear_hitl(thread_id)
             self._saved_states.pop(thread_id, None)
             return
 

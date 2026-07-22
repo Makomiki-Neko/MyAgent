@@ -115,7 +115,8 @@ class ExecutorAgent:
         user_content += "请基于以上信息，输出完成本子任务的结果摘要（中文）。"
 
         try:
-            llm = get_llm("executor_agent", self.cfg)
+            from nekoagent.rag_tools import bind_rag_tools_to_llm as _bind_rag
+            llm = _bind_rag(get_llm("executor_agent", self.cfg), "executor_agent")
         except (LLMConfigError, NekoAgentError):
             raise
 

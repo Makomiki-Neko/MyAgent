@@ -175,11 +175,38 @@ class MainAgent:
             full += chunk
         return full or "（空回复，请稍后重试喵~）"
 
+    def _react_chat(self, llm, messages: list, session_id: str, max_iterations: int = 3):
+        """ReAct 循环：处理 tool_calls，用 SystemMessage 回传结果后重试。"""
+        from nekoagent.rag_tools import execute_rag_tool as _exec_rag
+        from langchain_core.messages import SystemMessage as _SM
+
+        iteration = 0
+        while iteration < max_iterations:
+            response = llm.invoke(messages)
+            tool_calls = getattr(response, 'tool_calls', None) or []
+            if not tool_calls:
+                return response
+
+            for tc in tool_calls:
+                raw_result = _exec_rag(tc.get('name', ''), tc.get('args', {}))
+                if not raw_result or len(raw_result) < 10:
+                    raw_result = "检索未返回有效结果。"
+                messages.append(_SM(content=f"搜索结果：{raw_result}\n请基于此结果回答用户问题，不要再调用工具。"))
+                self._record_llm_call(session_id, messages, raw_result)
+                _log.info("ReAct: 执行工具 %s 完成", tc.get('name', ''))
+
+            iteration += 1
+            if iteration >= max_iterations:
+                _log.warning("ReAct 达到最大迭代次数 %d", max_iterations)
+
+        return llm.invoke(messages)
+
     def chat_stream(self, session_id: str, user_text: str) -> Iterable[str]:
-        """流式对话生成器，逐字 yield 文本块；末尾的 yield 等于完整回复。"""
+        """流式对话生成器，逐字 yield 文本块。"""
 
         try:
-            llm = get_llm("main_agent", self.cfg)
+            from nekoagent.rag_tools import bind_rag_tools_to_llm as _bind_rag
+            llm = _bind_rag(get_llm("main_agent", self.cfg), "main_agent")
         except (LLMConfigError, NekoAgentError):
             raise
 
@@ -196,14 +223,12 @@ class MainAgent:
 
         full_text = ""
         try:
-            for chunk in llm.stream(messages):
-                text = chunk.content if isinstance(chunk, BaseMessage) else str(chunk)
-                if isinstance(text, list):
-                    text = "".join(p.get("text", "") for p in text if isinstance(p, dict))
-                if not text:
-                    continue
-                full_text += text
-                yield text
+            # ReAct 循环处理工具调用
+            response = self._react_chat(llm, messages, session_id, max_iterations=3)
+            full_text = getattr(response, 'content', '') or str(response)
+            if isinstance(full_text, list):
+                full_text = "".join(p.get("text", "") for p in full_text if isinstance(p, dict))
+            yield full_text
         except Exception as exc:
             raise NekoAgentError("主 Agent 调用 LLM 失败，请稍后重试。", cause=exc) from exc
 

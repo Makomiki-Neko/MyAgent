@@ -9,6 +9,7 @@
 from __future__ import annotations
 
 from typing import Any
+import time
 
 from nekoagent.config.loader import get_config
 from nekoagent.observability.exceptions import NekoAgentError, format_friendly_error
@@ -57,9 +58,18 @@ def run_app() -> None:
         page.title = "NekoAgent"
         page.scroll = None
         page.padding = 0
-        page.window_min_width = 1280
-        page.window_min_height = 720
-        # 默认窗口大小 = 屏幕 2/3，居中
+
+        # ========== 0.86 新版窗口配置：全部迁移到 page.window ==========
+        page.window.title_bar_hidden = True    # 隐藏原生标题栏
+        page.window.frameless = False           # 保留窗口边框，支持边缘拖拽缩放
+        page.window.rounded_corners = True      # 窗口圆角
+
+        # ========= Windows 原生标题栏配色 =========
+        page.window.title_bar_background_color = ft.Colors.with_opacity(0.94, ft.Colors.PINK_50)
+        page.window.title_bar_text_color = ft.Colors.PINK_800
+        # ==========================================
+
+        # 计算屏幕尺寸与窗口居中
         try:
             import tkinter as tk
             root = tk.Tk()
@@ -70,12 +80,19 @@ def run_app() -> None:
         except Exception:
             sw, sh = 1920, 1080
         win_w = int(sw * 2 / 3)
-        win_h = int(sh * 2 / 3)
-        page.window_width = win_w
-        page.window_height = win_h
-        page.window_left = max(0, (sw - win_w) // 2)
-        page.window_top = max(0, (sh - win_h) // 2)
+        win_h = int(sh * 3 / 4)
+
+        page.window.width = win_w
+        page.window.height = win_h
+
+        page.window.min_width = int(sw * 2/3)
+        page.window.min_height = int(sh * 2/3)
+
+        page.window.left = max(0, (sw - win_w) // 2)
+        page.window.top = max(0, (sh - win_h) // 2)
+
         page.update()
+
         page.theme = ft.Theme(
             color_scheme_seed=ft.Colors.PINK,
             color_scheme=ft.ColorScheme(primary=ft.Colors.PINK_400, on_primary=ft.Colors.WHITE, secondary=ft.Colors.PURPLE_300),

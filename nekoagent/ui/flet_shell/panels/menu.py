@@ -88,6 +88,26 @@ def build_menu_panel(toggle_settings_callback, page: Any, pubsub: Any = None) ->
         )
     else:
         _banner_content = None
+    def _on_exit(e):
+        import sys
+        sys.exit(0)
+
+    exit_btn = ft.Container(
+        width=92, height=36,
+        bgcolor=ft.Colors.with_opacity(0.3, ft.Colors.RED_200),
+        border_radius=8,
+        on_click=_on_exit,
+        content=ft.Row(
+            alignment=ft.MainAxisAlignment.CENTER,
+            vertical_alignment=ft.CrossAxisAlignment.CENTER,
+            spacing=6,
+            controls=[
+                ft.Icon(ft.Icons.EXIT_TO_APP, color=ft.Colors.RED_700, size=18),
+                ft.Text("退出", size=13, color=ft.Colors.RED_800, weight=ft.FontWeight.BOLD),
+            ],
+        ),
+    )
+
     btn_row = ft.Row(
         alignment=ft.MainAxisAlignment.CENTER,
         spacing=4,
@@ -96,6 +116,7 @@ def build_menu_panel(toggle_settings_callback, page: Any, pubsub: Any = None) ->
             _menu_btn(ft.Icons.CHAT, "对话", lambda e: toggle_settings_callback(True)),
             _menu_btn(ft.Icons.LIBRARY_BOOKS, "RAG", lambda e: toggle_settings_callback("rag")),
             _menu_btn(ft.Icons.SETTINGS, "设置", _on_settings),
+            exit_btn,
         ]
     )
 
@@ -126,6 +147,7 @@ def build_menu_panel(toggle_settings_callback, page: Any, pubsub: Any = None) ->
                     ft.Divider(color=ft.Colors.with_opacity(0.3, ft.Colors.PINK_200), height=1),
                     ft.Container(height=6),
                     btn_row,
+                    ft.Container(height=4),
                 ],
                 expand=True,
             ),
