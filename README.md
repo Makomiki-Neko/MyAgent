@@ -29,8 +29,9 @@
 <img src="./src/HITL_1.jpg" width="800">
 <img src="./src/HITL_2.jpg" width="800">
 
-**任务结果推送**
+**任务通知、结果主动推送**
 <br>
+<img src="./src/Process.jpg" width="800">
 <img src="./src/End.jpg" width="800">
 
 </div>
