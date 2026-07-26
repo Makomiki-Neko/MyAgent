@@ -73,8 +73,9 @@ python -m nekoagent
 ```
 
 ## 待实现
-- Comfyui 接入
+- 意图路由
+- 记忆系统规范化
+- Comfyui SKILL
 - TTS 接入
-
 
 
