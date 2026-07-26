@@ -7,15 +7,15 @@
 
 实现：
 1. 如 subtask.required_skills 中包含懒加载 skill，按需载入 SkillRegistry 取得提示，作为 system 提示注入。
-2. 如 subtask.required_mcp_tools 中包含工具，经 MCPClient 池调用对应 MCP 服务器。
-3. 调用 LLM（profile=executor）生成单步结果，再 wrap 为 ExecutorResult。
+2. MCP 工具通过工具绑定机制自动注入 LLM 可调用列表，不再手动预调。
+3. ReAct 循环处理 LLM 主动发起的工具调用，完成后再进行结构化输出。
 """
 
 from __future__ import annotations
 
 from typing import Any
 
-from langchain_core.messages import HumanMessage, SystemMessage
+from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 
 from nekoagent.agents.shared.schemas import ExecutorResult, SubTask
 from nekoagent.agents.shared.output_constraints import invoke_with_retry
@@ -23,7 +23,6 @@ from nekoagent.config.loader import Config, get_config
 from nekoagent.llm.factory import get_llm
 from nekoagent.observability.exceptions import (
     LLMConfigError,
-    MCPError,
     NekoAgentError,
     SkillError,
 )
@@ -54,31 +53,66 @@ class ExecutorAgent:
             _log.debug("skill 加载失败，跳过：%s", skill_name)
             return ""
 
-    def _call_mcp_tool(self, tool_ref: str, args_text: str) -> str:
-        tool_ref = tool_ref.strip()
-        if "." not in tool_ref:
-            raise MCPError(f"MCP 工具引用格式错误 '{tool_ref}'，应为 'server.tool' 形式")
-        server_name, tool_name = tool_ref.split(".", 1)
+    def _build_llm_with_tools(self):
+        """构建 LLM 实例，绑定 RAG + MCP 工具。"""
         try:
-            from nekoagent.mcp import get_mcp_client_for_agent
-            client = get_mcp_client_for_agent("executor_agent", self.cfg)
-        except Exception as exc:
-            raise MCPError(f"MCP 客户端初始化失败：{exc}", cause=exc) from exc
-        if server_name not in client.allowed_servers():
-            raise MCPError(f"MCP 服务器 '{server_name}' 未在 YAML 授权给 executor_agent")
-        try:
-            import json
-            args = json.loads(args_text) if args_text.strip() else {}
-        except json.JSONDecodeError as exc:
-            raise MCPError(f"MCP 工具 {tool_ref} 参数非 JSON：{exc}", cause=exc) from exc
-        try:
-            return client.call_tool(server_name, tool_name, args)
-        except Exception as exc:
-            raise MCPError(f"MCP 工具调用 {tool_ref} 失败：{exc}", cause=exc) from exc
+            from nekoagent.mcp.binding import bind_agent_tools_to_llm
+            return bind_agent_tools_to_llm(get_llm("executor_agent", self.cfg), "executor_agent", self.cfg)
+        except (LLMConfigError, NekoAgentError):
+            raise
+
+    def _react_until_done(self, llm, messages: list, max_iterations: int = 5) -> list:
+        """ReAct 循环：处理工具调用，直到 LLM 返回非工具调用的最终响应。"""
+        from nekoagent.mcp.binding import AgentMCPClient
+
+        mcp_client = None
+        iteration = 0
+        while iteration < max_iterations:
+            response = llm.invoke(messages)
+            tool_calls = getattr(response, "tool_calls", None) or []
+            if not tool_calls:
+                break
+
+            for tc in tool_calls:
+                tc_name = tc.get("name", "")
+                tc_args = tc.get("args", {})
+                raw_result = self._execute_any_tool(tc_name, tc_args, mcp_client)
+                messages.append(SystemMessage(
+                    content=f"工具执行结果：{raw_result}\n请基于此结果继续完成子任务。"
+                ))
+                _log.info("ReAct: 执行工具 %s 完成", tc_name)
+
+            iteration += 1
+
+        if iteration >= max_iterations:
+            _log.warning("Executor ReAct 达到最大迭代次数 %d", max_iterations)
+
+        return messages
+
+    def _execute_any_tool(self, tool_name: str, args: dict, mcp_client) -> str:
+        """执行 RAG 或 MCP 工具，返回结果文本。"""
+        from nekoagent.rag_tools import execute_rag_tool as _exec_rag
+        from nekoagent.mcp.binding import get_mcp_tool_registry
+
+        registry = get_mcp_tool_registry()
+        for server_name, tools in registry.items():
+            if tool_name in tools:
+                if mcp_client is None:
+                    from nekoagent.mcp.binding import AgentMCPClient
+                    mcp_client = AgentMCPClient("executor_agent", self.cfg)
+                try:
+                    return mcp_client.call_tool(server_name, tool_name, args)
+                except Exception as exc:
+                    return f"[MCP 错误] {exc}"
+
+        result = _exec_rag(tool_name, args)
+        if result and len(result) >= 10:
+            return result
+        return f"未找到工具 '{tool_name}'"
 
     # ---------------- 子任务执行 ----------------
     def run_subtask(self, thread_id: str, session_id: str, subtask: SubTask) -> str:
-        """单步执行：拼上下文 + 调 LLM；返回 ExecutorResult.result 文本。"""
+        """单步执行：拼上下文 + ReAct 工具循环 + 调 LLM 结构化输出；返回 ExecutorResult.result 文本。"""
 
         # 拼装 system
         parts = [self.cfg.get_persona_cached("executor_agent").system_prompt]
@@ -90,19 +124,13 @@ class ExecutorAgent:
             except SkillError as exc:
                 _log.warning("skill 加载失败（不阻塞，仅记日志）：thread_id=%s skill=%s err=%s",
                              thread_id, skill_name, exc.friendly_message)
-        system_prompt = "\n\n".join(parts)
 
-        # 调 MCP（按需要）—— MVP 简化：如果 subtask.required_mcp_tools 非空，先调用第一个，结果回写为事实
-        tool_results: list[str] = []
-        for tool_ref in (subtask.required_mcp_tools or []):
-            try:
-                # MVP 无从参数结构 → 调用时传空对象，要求 server docs 提供示例
-                text = self._call_mcp_tool(tool_ref, "")
-                tool_results.append(f"{tool_ref}: {text[:500]}")
-            except MCPError as exc:
-                _log.warning("MCP 调用失败：thread_id=%s tool=%s err=%s",
-                             thread_id, tool_ref, exc.friendly_message)
-                tool_results.append(f"{tool_ref}: [FAILURE] {exc.friendly_message}")
+        # 告知 LLM 可用的 MCP 工具
+        tool_hints = self._build_tool_hints(subtask)
+        if tool_hints:
+            parts.append(tool_hints)
+
+        system_prompt = "\n\n".join(parts)
 
         user_content = (
             f"子任务名：{subtask.name}\n"
@@ -110,24 +138,32 @@ class ExecutorAgent:
         )
         if subtask.context:
             user_content += f"上下文：\n{subtask.context[:2000]}\n"
-        if tool_results:
-            user_content += "工具返回事实：\n" + "\n".join(tool_results) + "\n"
-        user_content += "请基于以上信息，输出完成本子任务的结果摘要（中文）。"
+        user_content += "请根据需要调用可用工具，然后输出完成本子任务的结果摘要（中文）。"
+
+        messages = [
+            SystemMessage(content=system_prompt),
+            HumanMessage(content=user_content),
+        ]
 
         try:
-            from nekoagent.rag_tools import bind_rag_tools_to_llm as _bind_rag
-            llm = _bind_rag(get_llm("executor_agent", self.cfg), "executor_agent")
+            llm = self._build_llm_with_tools()
         except (LLMConfigError, NekoAgentError):
             raise
 
-        # 若 MCP 有错，仍允许执行 LLM 但带 [FAILURE] 事实给后续异常处理判断
+        # ReAct 循环：让 LLM 自主调用工具
+        messages = self._react_until_done(llm, messages)
+        _log.info("ReAct 循环完成 thread_id=%s", thread_id)
+
+        # 结构化输出最终结果
+        structured_prompt = (
+            "请输出符合 ExecutorResult 的 JSON 对象，仅含 result 与 tokens_used 与 notes 字段。"
+        )
+        messages.append(SystemMessage(content=structured_prompt))
+
         result = invoke_with_retry(
             llm,
             ExecutorResult,
-            [
-                SystemMessage(content=system_prompt + "\n请输出符合 ExecutorResult 的 JSON 对象，仅含 result 与 tokens_used 与 notes 字段。"),
-                HumanMessage(content=user_content),
-            ],
+            messages,
             cfg=self.cfg,
             on_giveup_message="子 Agent 无法完成结构化输出，已触发友好回退。",
         )
@@ -159,6 +195,31 @@ class ExecutorAgent:
         except Exception:
             pass
         return result.result
+
+    def _build_tool_hints(self, subtask: SubTask) -> str:
+        """从 MCP 注册表中提取当前 Agent 可见的工具列表，注入 system prompt 供 LLM 参考。"""
+        from nekoagent.mcp.binding import get_mcp_tool_registry
+
+        registry = get_mcp_tool_registry()
+        agent_cfg = self.cfg.agents.get("executor_agent")
+        if agent_cfg is None:
+            return ""
+        allowed = set(agent_cfg.mcp_servers)
+
+        hints = []
+        for server_name, tools in registry.items():
+            if server_name not in allowed:
+                continue
+            for tool_name, tool_def in tools.items():
+                desc = tool_def.get("description", "") or tool_name
+                hints.append(f"  - {tool_name}: {desc}")
+
+        if not hints:
+            return ""
+        return (
+            "可调用的 MCP 工具（可直接调用无需手动传参标记）：\n"
+            + "\n".join(hints)
+        )
 
 
 _executor_singleton: ExecutorAgent | None = None

@@ -46,7 +46,7 @@ agents:
     llm_profile: executor
     system_prompt_file: ./personas/executor.yaml
     mcp_servers:
-    - weather
+    - neko_system_tools
 database:
   backend: mysql
   url: mysql+pymysql://root:root@localhost:3306/agent?charset=utf8mb4
@@ -66,20 +66,9 @@ rag:
   inject_when_above_threshold: true
 skills_dir: ./skills
 mcp_servers:
-  weather:
-    transport: stdio
-    command: python
-    args:
-    - -m
-    - mcp_servers.dummy_weather
-    env: {}
-  todo:
-    transport: stdio
-    command: python
-    args:
-    - -m
-    - mcp_servers.dummy_todo
-    env: {}
+  neko_system_tools:
+    transport: sse
+    url: http://127.0.0.1:8002
 output_retry:
   max_attempts: 3
   backoff_initial: 0.5

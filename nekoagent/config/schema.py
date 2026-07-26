@@ -117,9 +117,14 @@ class MCPServerConfig(BaseModel):
     model_config = ConfigDict(extra="ignore")
 
     transport: str = "stdio"
+    # stdio 字段
     command: str | None = None
     args: list[str] = Field(default_factory=list)
     env: dict[str, str] = Field(default_factory=dict)
+    # SSE 字段
+    url: str | None = None
+    host: str | None = None
+    port: int | None = None
 
 
 class RootConfig(BaseModel):

@@ -68,6 +68,14 @@ def get_main_agent(cfg: Config | None = None) -> "MainAgent":
     return _main_agent_singleton
 
 
+def _find_mcp_tool_in_registry(tool_name: str, registry: dict) -> dict | None:
+    """在 MCP 注册表中搜索 tool_name 所属的服务器定义。"""
+    for server_name, tools in registry.items():
+        if tool_name in tools:
+            return tools[tool_name]
+    return None
+
+
 def _row_to_message(row: dict[str, Any]) -> BaseMessage:
     role = row["role"]
     content = row["content"]
@@ -176,9 +184,13 @@ class MainAgent:
         return full or "（空回复，请稍后重试喵~）"
 
     def _react_chat(self, llm, messages: list, session_id: str, max_iterations: int = 3):
-        """ReAct 循环：处理 tool_calls，用 SystemMessage 回传结果后重试。"""
+        """ReAct 循环：处理 tool_calls（RAG + MCP），用 SystemMessage 回传结果后重试。"""
         from nekoagent.rag_tools import execute_rag_tool as _exec_rag
+        from nekoagent.mcp.binding import get_mcp_tool_registry, AgentMCPClient
         from langchain_core.messages import SystemMessage as _SM
+
+        mcp_registry = get_mcp_tool_registry()
+        mcp_client = None
 
         iteration = 0
         while iteration < max_iterations:
@@ -188,12 +200,33 @@ class MainAgent:
                 return response
 
             for tc in tool_calls:
-                raw_result = _exec_rag(tc.get('name', ''), tc.get('args', {}))
-                if not raw_result or len(raw_result) < 10:
-                    raw_result = "检索未返回有效结果。"
-                messages.append(_SM(content=f"搜索结果：{raw_result}\n请基于此结果回答用户问题，不要再调用工具。"))
+                tc_name = tc.get('name', '')
+                tc_args = tc.get('args', {})
+
+                # 检查是否为 MCP 工具
+                mcp_tool = _find_mcp_tool_in_registry(tc_name, mcp_registry)
+                if mcp_tool:
+                    if mcp_client is None:
+                        mcp_client = AgentMCPClient("main_agent", self.cfg)
+                    try:
+                        raw_result = mcp_client.call_tool(
+                            mcp_tool["server"], tc_name, tc_args
+                        )
+                    except Exception as exc:
+                        raw_result = f"[MCP 错误] {exc}"
+                    result_label = "工具执行结果"
+                else:
+                    # 回退为 RAG 工具
+                    raw_result = _exec_rag(tc_name, tc_args)
+                    if not raw_result or len(raw_result) < 10:
+                        raw_result = "检索未返回有效结果。"
+                    result_label = "搜索结果"
+
+                messages.append(_SM(
+                    content=f"{result_label}：{raw_result}\n请基于此结果回答用户问题，不要再调用工具。"
+                ))
                 self._record_llm_call(session_id, messages, raw_result)
-                _log.info("ReAct: 执行工具 %s 完成", tc.get('name', ''))
+                _log.info("ReAct: 执行工具 %s 完成", tc_name)
 
             iteration += 1
             if iteration >= max_iterations:
@@ -205,8 +238,8 @@ class MainAgent:
         """流式对话生成器，逐字 yield 文本块。"""
 
         try:
-            from nekoagent.rag_tools import bind_rag_tools_to_llm as _bind_rag
-            llm = _bind_rag(get_llm("main_agent", self.cfg), "main_agent")
+            from nekoagent.mcp.binding import bind_agent_tools_to_llm
+            llm = bind_agent_tools_to_llm(get_llm("main_agent", self.cfg), "main_agent", self.cfg)
         except (LLMConfigError, NekoAgentError):
             raise
 

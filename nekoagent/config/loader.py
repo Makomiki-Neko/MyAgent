@@ -131,6 +131,19 @@ def load_config(path: str = _DEFAULT_PATH) -> Config:
 
     _config_singleton = Config(raw=raw, validated=validated, source_path=abs_path)
     _log.info("配置加载完成：%s（version=%s）", abs_path, validated.version)
+
+    # MCP 服务器配置加载后自动发现工具（非阻塞，失败仅记日志）
+    if validated.mcp_servers:
+        try:
+            from nekoagent.mcp.binding import refresh_mcp_tool_registry
+            _log.info("正在自动发现 MCP 工具（%d 个服务器）...", len(validated.mcp_servers))
+            refresh_mcp_tool_registry(_config_singleton)
+        except Exception as exc:
+            _log.warning(
+                "MCP 工具自动发现失败（不影响主配置加载，稍后可手动重试）: %s",
+                exc,
+            )
+
     return _config_singleton
 
 
