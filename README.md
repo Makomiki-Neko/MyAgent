@@ -1,6 +1,6 @@
 <div align="center">
 
-<img src="./preview.jpg" width="800">
+<img src="./src/main_page_1.jpg" width="800">
 
 # Neko Agent
 ## 多 Agent 智能交互与任务执行系统 Multi\-Agent System 
@@ -21,6 +21,20 @@
 - **任务主管Agent**：核心任务调度中枢，负责任务拆解、流程规划、资源分配、子任务进度管控与异常纠错，支持Reflexion范式，可自动审核子Agent执行效果，并按需产生人在回路中断
 
 - **执行子Agent**：轻量化执行单元，专注单一细分任务落地，支持按需工具调用与Skill加载
+
+<div align="center">
+
+ **人在回路**
+ <br>
+<img src="./src/HITL_1.jpg" width="800">
+<img src="./src/HITL_2.jpg" width="800">
+
+**任务通知、结果主动推送**
+<br>
+<img src="./src/Process.jpg" width="800">
+<img src="./src/End.jpg" width="800">
+
+</div>
 
 ## 🔥 核心特性
 
@@ -59,8 +73,9 @@ python -m nekoagent
 ```
 
 ## 待实现
-- Comfyui 接入
+- 意图路由
+- 记忆系统规范化
+- Comfyui SKILL
 - TTS 接入
-
 
 
