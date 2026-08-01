@@ -74,6 +74,14 @@ def pick_model_directory() -> str:
     return _tk_pick_directory("选择模型目录")
 
 
+def pick_audio_file() -> str:
+    """选择音频文件。"""
+    return _tk_pick_file(
+        "选择音频文件",
+        [("音频文件", "*.wav *.mp3 *.flac *.ogg"), ("WAV", "*.wav"), ("MP3", "*.mp3")],
+    )
+
+
 def update_field_from_dialog(field: Any, dialog_result: str) -> None:
     """更新 TextField 的值并返回是否成功。"""
     if dialog_result:

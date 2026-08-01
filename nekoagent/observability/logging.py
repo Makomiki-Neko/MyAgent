@@ -56,8 +56,12 @@ def configure_logging(log_config: dict[str, Any] | None = None) -> logging.Logge
         root.warning("无法初始化文件日志（%s），仅保留控制台日志。", exc)
 
     root.setLevel(logging.DEBUG)
+
+    # 关闭 httpx INFO 日志（Ping LLM API 成功时不再打印 200 OK）
+    logging.getLogger("httpx").setLevel(logging.WARNING)
+
     logger = logging.getLogger("nekoagent")
-    logger.info("NekoAgent 日志系统已就绪，level=%s", level_name)
+    logger.info("NekoAgent 日志系统就绪，level=%s", level_name)
     _CONFIGURED = True
     return logger
 

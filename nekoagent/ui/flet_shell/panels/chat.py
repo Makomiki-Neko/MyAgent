@@ -1,4 +1,4 @@
-"""对话窗口：第 3 列 - 历史消息流 + Token流式输出 + 状态提示 + Enter/ShiftEnter 键绑。"""
+"""对话窗口：第 3 列 - 历史消息流 + Token流式输出 + 状态提示"""
 
 from __future__ import annotations
 
@@ -11,7 +11,10 @@ from nekoagent.config.loader import get_config
 from nekoagent.memory.stores import get_user_memory_store
 from nekoagent.queue.scheduler import handle_user_decision as sched_user_decision
 from nekoagent.observability.exceptions import format_friendly_error
+from nekoagent.observability.logging import get_logger
 from nekoagent.ui.flet_shell.theme import border_all, glass_container, section_title
+
+_log = get_logger("ui.chat")
 
 _chat_log_holder: list[Any] = [None]
 
@@ -32,21 +35,91 @@ def build_chat_panel(page: Any, pubsub: Any, get_active_session_id: Callable[[],
             shadow=ft.BoxShadow(color=ft.Colors.with_opacity(0.15, ft.Colors.PINK_200), offset=ft.Offset(0, 2), blur_radius=6),
         )
 
-    def _strip_italic(text: str) -> str:
-        """去除 Markdown 斜体标记（*text* / _text_），保留 **bold**。"""
-        import re
-        # 将 *text* 替换为 text（但不影响 **bold**）
-        text = re.sub(r'(?<!\*)\*(?!\*)([^*]+)(?<!\*)\*(?!\*)', r'\1', text)
-        # 将 _text_ 替换为 text（但不影响 __ 等）
-        text = re.sub(r'(?<!_)_(?!_)([^_]+)(?<!_)_(?!_)', r'\1', text)
-        return text
+    _playing_set: set[int] = set()
+    _timers: dict[int, threading.Timer] = {}
 
-    def _assistant_bubble(text: str) -> ft.Container:
-        text = _strip_italic(text)
+    def _reset_play_button(msg_id: int, btn_ref: ft.Ref):
+        _playing_set.discard(msg_id)
+        _timers.pop(msg_id, None)
+        try:
+            page.run_thread(lambda: _update_btn_icon(btn_ref, False))
+        except Exception:
+            pass
+
+    def _update_btn_icon(btn_ref: ft.Ref, playing: bool):
+        btn = btn_ref.current
+        if btn:
+            btn.icon = ft.Icons.PAUSE_CIRCLE_FILLED if playing else ft.Icons.PLAY_CIRCLE_FILLED
+            btn.icon_color = ft.Colors.PINK_700 if playing else ft.Colors.PINK_400
+            btn.tooltip = "暂停" if playing else "播放语音"
+            btn.update()
+
+    def _toggle_audio(msg_id: int, btn_ref: ft.Ref):
+        try:
+            import winsound
+            if msg_id in _playing_set:
+                # 停止播放
+                if msg_id in _timers:
+                    _timers[msg_id].cancel()
+                    del _timers[msg_id]
+                winsound.PlaySound(None, winsound.SND_PURGE)
+                _reset_play_button(msg_id, btn_ref)
+                _log.info("TTS 停止播放 msg_id=%s", msg_id)
+                return
+            from nekoagent.tts.engine import get_engine
+            path = get_engine().get_audio_path(msg_id)
+            _log.info("TTS 播放请求 msg_id=%s path=%s", msg_id, path)
+            if not path:
+                _log.warning("TTS 音频不存在 msg_id=%s", msg_id)
+                try:
+                    snack = ft.SnackBar(ft.Text("音频不存在或生成中"), open=True)
+                    page.overlay.append(snack)
+                    page.update()
+                except Exception:
+                    pass
+                return
+            import wave as _wave
+            with _wave.open(path, 'r') as wf:
+                frames = wf.getnframes()
+                rate = wf.getframerate()
+                duration = frames / rate if rate > 0 else 3.0
+            winsound.PlaySound(path, winsound.SND_FILENAME | winsound.SND_ASYNC)
+            _playing_set.add(msg_id)
+            _update_btn_icon(btn_ref, True)
+            # 自动恢复按钮
+            timer = threading.Timer(duration, _reset_play_button, args=(msg_id, btn_ref))
+            timer.daemon = True
+            _timers[msg_id] = timer
+            timer.start()
+            _log.info("TTS 开始播放 msg_id=%s duration=%.1fs", msg_id, duration)
+        except Exception as exc:
+            _log.error("TTS 播放异常: %s", exc, exc_info=True)
+
+    def _make_play_btn(msg_id: int) -> ft.Control:
+        ref = ft.Ref()
+        btn = ft.IconButton(
+            ref=ref,
+            icon=ft.Icons.PLAY_CIRCLE_FILLED,
+            icon_size=20,
+            icon_color=ft.Colors.PINK_400,
+            tooltip="播放语音",
+            on_click=lambda e: _toggle_audio(msg_id, ref),
+            height=28, width=28,
+        )
+        return btn
+
+    def _assistant_bubble(text: str, msg_id: int | None = None) -> ft.Container:
+        play_btn = _make_play_btn(msg_id) if msg_id else ft.Container(width=0, height=0)
         return ft.Container(
-            content=ft.Container(
-                content=ft.Markdown(text, auto_follow_links=True, selectable=True),
-                expand=1,
+            content=ft.Row(
+                vertical_alignment=ft.CrossAxisAlignment.CENTER,
+                controls=[
+                    ft.Container(
+                        content=ft.Markdown(text, auto_follow_links=True, selectable=True),
+                        expand=True,
+                    ),
+                    play_btn,
+                ],
             ),
             padding=ft.Padding(left=14, top=10, right=14, bottom=10),
             bgcolor=ft.Colors.with_opacity(0.85, ft.Colors.WHITE),
@@ -66,8 +139,8 @@ def build_chat_panel(page: Any, pubsub: Any, get_active_session_id: Callable[[],
             )
         )
 
-    def _append_assistant_slot(text: str):
-        bubble = _assistant_bubble(text)
+    def _append_assistant_slot(text: str, msg_id: int | None = None):
+        bubble = _assistant_bubble(text, msg_id=msg_id)
         ctrl = ft.Container(
             content=bubble,
             expand=True,
@@ -78,10 +151,10 @@ def build_chat_panel(page: Any, pubsub: Any, get_active_session_id: Callable[[],
         chat_log.controls.append(ctrl)
         return ctrl
 
-    def _update_assistant_slot(text: str):
+    def _update_assistant_slot(text: str, msg_id: int | None = None):
         ctrl = assistant_slot["container"]
         if ctrl is not None:
-            ctrl.content = _assistant_bubble(text)
+            ctrl.content = _assistant_bubble(text, msg_id=msg_id)
             assistant_slot["text"] = text
 
     def _stream_token(token: str):
@@ -124,9 +197,11 @@ def build_chat_panel(page: Any, pubsub: Any, get_active_session_id: Callable[[],
                 else:
                     for token in agent.chat_stream(sid, text):
                         page.run_thread(lambda t=token: _stream_token(t))
-                    page.run_thread(lambda: pubsub.notify("status_change", {}))
+                    msg_id = agent._last_assistant_msg_id
+                    current_text = assistant_slot["text"]
+                    page.run_thread(lambda: (_update_assistant_slot(current_text, msg_id=msg_id) if msg_id else None, pubsub.notify("status_change", {})))
             except Exception as exc:
-                page.run_thread(lambda: _update_assistant_slot(format_friendly_error(exc)))
+                page.run_thread(lambda e=exc: _update_assistant_slot(format_friendly_error(e)))
             try:
                 page.run_thread(lambda: page.update())
             except Exception:
@@ -174,7 +249,7 @@ def build_chat_panel(page: Any, pubsub: Any, get_active_session_id: Callable[[],
                     )
                 elif row["role"] == "assistant":
                     chat_log.controls.append(
-                        ft.Container(content=_assistant_bubble(row["content"]), expand=True, alignment=ft.Alignment(-1, 0))
+                        ft.Container(content=_assistant_bubble(row["content"], msg_id=row.get("id")), expand=True, alignment=ft.Alignment(-1, 0))
                     )
             try:
                 asyncio.create_task(chat_log.scroll_to(offset=-1, duration=100))
@@ -187,15 +262,23 @@ def build_chat_panel(page: Any, pubsub: Any, get_active_session_id: Callable[[],
     if history_loader is not None:
         history_loader["fn"] = _load_history
 
-    # ---- HITL 消息持久化辅助 ----
+    # ---- 消息持久化 + TTS 触发 ----
     def _save_msg(role, content):
         try:
             store = get_user_memory_store()
             sid = get_active_session_id()
             if sid and content:
-                store.add_message(session_id=sid, role=role, content=content)
-        except Exception:
-            pass
+                msg_id = store.add_message(session_id=sid, role=role, content=content)
+                _log.debug("_save_msg role=%s msg_id=%s len=%d", role, msg_id, len(content))
+                if role == "assistant" and content.strip():
+                    try:
+                        from nekoagent.tts.pipeline import trigger_tts_async
+                        _log.info("TTS 触发 _save_msg msg_id=%s", msg_id)
+                        trigger_tts_async(msg_id, content)
+                    except Exception as exc:
+                        _log.error("TTS 触发失败 _save_msg: %s", exc)
+        except Exception as exc:
+            _log.error("_save_msg 异常 role=%s: %s", role, exc)
 
     # ---- 任务规划到达（HITL 人在回路） ----
     _mod_row_ref = {"row": None, "thread_id": None}
@@ -397,9 +480,13 @@ def build_chat_panel(page: Any, pubsub: Any, get_active_session_id: Callable[[],
             chat_log.controls.append(row)
             page.update()
         def _auto_decide(_sid):
+            try:
+                _pname = get_config().get_persona_cached("main_agent").name
+            except Exception:
+                _pname = "主Agent"
             question = _last_info_question.get("q", "")
-            _save_msg("user", "让主Agent代为决定")
-            _append_user("让主Agent代为决定")
+            _save_msg("user", f"让{_pname}代为决定")
+            _append_user(f"让{_pname}代为决定")
             if _info_row_ref["row"] is not None:
                 try:
                     chat_log.controls.remove(_info_row_ref["row"])
@@ -421,7 +508,7 @@ def build_chat_panel(page: Any, pubsub: Any, get_active_session_id: Callable[[],
                 except Exception:
                     answer = ""
                 if answer.strip():
-                    _save_msg("user", f"（由主Agent代为决定）{answer[:200]}")
+                    _save_msg("user", f"（由{_pname}代为决定）{answer[:200]}")
                     try:
                         feedback = agent.generate_info_request_feedback("auto_decide", answer, session_id=sid)
                     except Exception:

@@ -156,7 +156,9 @@ class ExecutorAgent:
 
         # 结构化输出最终结果
         structured_prompt = (
-            "请输出符合 ExecutorResult 的 JSON 对象，仅含 result 与 tokens_used 与 notes 字段。"
+            "请输出符合 ExecutorResult 的 json 对象，仅含 result 与 tokens_used 与 notes 字段。\n"
+            "参考 json 格式：\n"
+            '{"result": "执行结果摘要", "tokens_used": 0, "notes": ""}'
         )
         messages.append(SystemMessage(content=structured_prompt))
 
@@ -197,27 +199,33 @@ class ExecutorAgent:
         return result.result
 
     def _build_tool_hints(self, subtask: SubTask) -> str:
-        """从 MCP 注册表中提取当前 Agent 可见的工具列表，注入 system prompt 供 LLM 参考。"""
+        """提取当前 Agent 可见的 MCP + RAG 工具列表，注入 system prompt 供 LLM 参考。"""
         from nekoagent.mcp.binding import get_mcp_tool_registry
-
-        registry = get_mcp_tool_registry()
-        agent_cfg = self.cfg.agents.get("executor_agent")
-        if agent_cfg is None:
-            return ""
-        allowed = set(agent_cfg.mcp_servers)
+        from nekoagent.rag_tools import get_all_rag_lib_metas
 
         hints = []
-        for server_name, tools in registry.items():
-            if server_name not in allowed:
-                continue
-            for tool_name, tool_def in tools.items():
-                desc = tool_def.get("description", "") or tool_name
-                hints.append(f"  - {tool_name}: {desc}")
+
+        # MCP 工具
+        registry = get_mcp_tool_registry()
+        agent_cfg = self.cfg.agents.get("executor_agent")
+        if agent_cfg is not None:
+            allowed = set(agent_cfg.mcp_servers)
+            for server_name, tools in registry.items():
+                if server_name not in allowed:
+                    continue
+                for tool_name, tool_def in tools.items():
+                    desc = tool_def.get("description", "") or tool_name
+                    hints.append(f"  - {tool_name}: {desc}")
+
+        # RAG 工具
+        for lib_name, lib_meta in get_all_rag_lib_metas().items():
+            desc = lib_meta.get("description", "") or lib_name
+            hints.append(f"  - search_{lib_name}: {desc}")
 
         if not hints:
             return ""
         return (
-            "可调用的 MCP 工具（可直接调用无需手动传参标记）：\n"
+            "可用工具（仅在子任务目标明确匹配时才调用，不相关时不要使用）：\n"
             + "\n".join(hints)
         )
 

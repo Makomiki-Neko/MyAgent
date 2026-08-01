@@ -96,6 +96,7 @@ class MainAgent:
     def __init__(self, cfg: Config) -> None:
         self.cfg = cfg
         self._persona_cache: dict[str, str] = {}
+        self._last_assistant_msg_id: int | None = None
 
     # ---------- 人设 ----------
     def _persona_system_prompt(self) -> str:
@@ -269,7 +270,7 @@ class MainAgent:
             full_text = "（空回复，请稍后重试喵~）"
 
         try:
-            store.add_message(
+            self._last_assistant_msg_id = store.add_message(
                 session_id=session_id,
                 role="assistant",
                 content=full_text,
@@ -277,12 +278,21 @@ class MainAgent:
             )
         except Exception as exc:
             _log.warning("回复持久化失败（已返回给用户）：%s", exc)
+            self._last_assistant_msg_id = None
 
         try:
             from nekoagent.observability.token_counter import record_dialogue_tokens
             record_dialogue_tokens(session_id, self._rough_tokens(full_text), agent_role="main_agent")
         except Exception:
             pass
+
+        # 触发 TTS 后处理（后台不阻塞）
+        if self._last_assistant_msg_id is not None and full_text.strip():
+            try:
+                from nekoagent.tts.pipeline import trigger_tts_async
+                trigger_tts_async(self._last_assistant_msg_id, full_text)
+            except Exception:
+                pass
 
         # RAG 与总结中间件不在流式 invoke 前生效；在外层 chat 调用 hook 已处理。未来可下沉。
 
@@ -291,7 +301,7 @@ class MainAgent:
 
         try:
             store = get_user_memory_store()
-            history_rows = store.fetch_active_messages(session_id, limit=100)
+            history_rows = store.fetch_active_messages(session_id, limit=20)
         except Exception as exc:
             _log.warning("主 Agent 历史消息加载失败（短路为空历史）：%s", exc)
             history_rows = []
@@ -516,10 +526,16 @@ def handle_user_message(session_id: str, user_text: str) -> tuple[str, dict[str,
             ]
             response = llm.invoke(msgs)
             ack = response.content if isinstance(response, BaseMessage) else str(response)
-            store.add_message(session_id=session_id, role="assistant", content=ack, tokens=agent._rough_tokens(ack))
+            msg_id = store.add_message(session_id=session_id, role="assistant", content=ack, tokens=agent._rough_tokens(ack))
             try:
                 from nekoagent.observability.token_counter import estimate_tokens as _et, record_dialogue_tokens as _rdt
                 _rdt(session_id, _et(user_text) + _et(ack), agent_role="main_agent")
+            except Exception:
+                pass
+            # TTS
+            try:
+                from nekoagent.tts.pipeline import trigger_tts_async
+                trigger_tts_async(msg_id, ack)
             except Exception:
                 pass
             return ack, {"distilled": distilled, "submission": status}

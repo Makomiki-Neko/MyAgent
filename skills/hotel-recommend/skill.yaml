@@ -1,5 +1,5 @@
 name: hotel-recommend
-description: 推荐符合双人出行偏好的酒店，关注私人空间与场景适配
+description: 推荐符合出行时的酒店
 type: prompt
 system_prompt: |
   你具备酒店推荐知识。在为双人出行场景挑选酒店时优先考虑：

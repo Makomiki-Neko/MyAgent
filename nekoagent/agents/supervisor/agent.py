@@ -156,20 +156,23 @@ class SupervisorAgent:
 
         try:
             from nekoagent.skills import get_skill_registry as _gsk
-            _avail = list(_gsk(self.cfg).all_skills().keys())
+            _all = _gsk(self.cfg).all_skills()
+            _avail = [f"{n}({m.get('summary','')})" for n, m in _all.items()]
         except Exception:
             _avail = []
-        skill_hint = f"\n可用 Skill：{_avail}（仅从列表中选择，勿使用未列出的 skill）" if _avail else "\n注意：当前没有可用 Skill，子任务请勿设置 required_skills。"
+        skill_hint = f"\n可用 Skill（名称与用途）：\n" + "\n".join(f"  - {s}" for s in _avail) + "\n仅从列表中选择，勿使用未列出的 skill。" if _avail else "\n注意：当前没有可用 Skill，子任务请勿设置 required_skills。"
 
         prompt = (
             f"{persona}\n\n核心任务：{task_summary}\n"
-            f"请拆解为可原子执行的子任务清单（按依赖顺序），输出符合 TaskPlan 结构的 JSON 对象。"
+            f"请拆解为可原子执行的子任务清单（按依赖顺序），输出符合 TaskPlan 结构的 json 对象。\n"
+            f"参考 json 格式：\n"
+            f'{{"task_summary": "任务简述", "subtasks": [{{"name": "子任务名", "goal": "子任务目标", "depends_on": [], "required_skills": [], "required_mcp_tools": [], "context": ""}}], "referenced_proc_mem": false, "notes": ""}}\n'
             f"{skill_hint}{plan_hint}"
         )
         llm = get_llm("supervisor_agent", self.cfg)
         plan = invoke_with_retry(
             llm, TaskPlan,
-            [SystemMessage(content=prompt), HumanMessage(content="请输出 JSON。")],
+            [SystemMessage(content=prompt), HumanMessage(content="请输出 json。")],
             cfg=self.cfg,
             on_giveup_message="无法生成可执行任务计划，请稍后重试。",
         )

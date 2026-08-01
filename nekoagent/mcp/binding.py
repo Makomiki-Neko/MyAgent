@@ -478,8 +478,10 @@ def refresh_mcp_tool_registry(cfg: Config | None = None) -> dict[str, dict[str, 
             raw_tools = session.list_tools()
             tools = {}
             for t in raw_tools:
-                tools[t["name"]] = {
-                    "name": t["name"],
+                raw_name = t["name"]
+                safe_name = _sanitize_tool_name(raw_name)
+                tools[safe_name] = {
+                    "name": safe_name,
                     "description": t.get("description", ""),
                     "inputSchema": t.get("inputSchema", {}),
                     "server": server_name,
@@ -603,11 +605,28 @@ def bind_agent_tools_to_llm(llm, agent_name: str = "main_agent", cfg: Config | N
         return llm
 
 
+# ─────────── 工具名净化（OpenAI 要求 ^[a-zA-Z0-9_-]+$） ───────────
+
+
+def _sanitize_tool_name(name: str) -> str:
+    """将工具名中不合规字符替换为下划线；若结果为空则回退为 hash。"""
+    import hashlib, re
+    sanitized = re.sub(r'[^a-zA-Z0-9_-]', '_', name)
+    sanitized = sanitized.strip('_')
+    if not sanitized or len(sanitized) < 2:
+        suffix = hashlib.md5(name.encode('utf-8')).hexdigest()[:8]
+        sanitized = f"tool_{suffix}"
+    if sanitized != name:
+        _log.info("工具名 '%s' 已自动修正为 '%s'", name, sanitized)
+    return sanitized
+
+
 # ─────────── LangChain 工具构造 ───────────
 
 
 def _build_langchain_tool(server_name: str, tool_name: str, tool_def: dict) -> Any:
     """将 MCP 工具定义为 LangChain StructuredTool。"""
+    tool_name = _sanitize_tool_name(tool_name)
     try:
         from langchain_core.tools import StructuredTool
     except ImportError:

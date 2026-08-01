@@ -23,12 +23,12 @@ T = TypeVar("T", bound=BaseModel)
 
 
 def bind_structured(llm: Any, schema: Type[BaseModel]):
-    """对 LLM 绑定结构化输出（优先 JSON Schema，回退 function_calling）。"""
+    """对 LLM 绑定结构化输出（使用 json_object 模式，兼容 DeepSeek 等 OpenAI 兼容 API）。"""
 
     try:
-        return llm.with_structured_output(schema)
+        return llm.with_structured_output(schema, method="json_mode")
     except (NotImplementedError, AttributeError, TypeError) as exc:
-        _log.warning("LLM 不支持结构化输出绑定（OpenAI tools），回退到纯 prompt 模式：%s", exc)
+        _log.warning("LLM 不支持 json_mode，回退到纯 prompt 模式：%s", exc)
         return None
 
 

@@ -1,7 +1,7 @@
 """RAG 流水线编排 + 注入决策 + 重建索引。
 
 `rag_search(query, cfg)` 返回 [(doc_id, text, score)] 已排序、阈值过滤。
-`inject_or_skip(messages, query, cfg)` 在 messages 列表前部注入 system 记忆片段（仅当达到门槛）。
+`inject_or_skip(messages, query, cfg)` 在 persona prompt 之后注入 HumanMessage 记忆片段（仅当达到门槛）。
 `rebuild_index(cfg)` 切换嵌入模型后重建索引。
 """
 
@@ -10,7 +10,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-from langchain_core.messages import BaseMessage, SystemMessage
+from langchain_core.messages import BaseMessage, HumanMessage, SystemMessage
 
 from nekoagent.config.loader import Config, get_config
 from nekoagent.llm import embedding as embedding_module
@@ -105,7 +105,7 @@ def rag_search(query: str, cfg: Config | None = None) -> list[tuple[str, str, fl
 
 
 def inject_or_skip(messages: list[BaseMessage], query: str, cfg: Config | None = None) -> list[BaseMessage]:
-    """达到阈值时在 messages 前部注入记忆 system 消息；否则原样返回。"""
+    """达到阈值时在 persona system prompt 之后注入记忆（HumanMessage 类型）；否则原样返回。"""
 
     cfg = cfg or get_config()
     if not cfg.rag.inject_when_above_threshold:
@@ -119,7 +119,11 @@ def inject_or_skip(messages: list[BaseMessage], query: str, cfg: Config | None =
         f"{preview}\n"
         "[长期记忆参考结束]"
     )
-    return [SystemMessage(content=injection_text), *messages]
+    # 插入在第一条 SystemMessage（persona）之后，避免污染 system prompt
+    insert_pos = 1 if messages and isinstance(messages[0], SystemMessage) else 0
+    result = list(messages)
+    result.insert(insert_pos, HumanMessage(content=injection_text))
+    return result
 
 
 def rebuild_index(cfg: Config | None = None) -> None:

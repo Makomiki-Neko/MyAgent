@@ -57,6 +57,19 @@ def build_settings_panel(page: Any, pubsub: Any) -> Any:
                 if tok_val.isdigit():
                     profile["max_tokens"] = int(tok_val)
 
+            # 更新 TTS 字段
+            new_raw.setdefault("tts", {})
+            new_raw["tts"]["model_path"] = _tts_model_field.value.strip()
+            new_raw["tts"]["device"] = _tts_device.value
+            # 获取当前激活的克隆声音
+            try:
+                from nekoagent.tts.engine import get_engine
+                engine = get_engine()
+                active = engine.get_active_clone()
+                new_raw["tts"]["active_clone"] = active["name"] if active else ""
+            except Exception:
+                new_raw["tts"]["active_clone"] = ""
+
             # 更新 RAG 字段
             new_raw.setdefault("auxiliary_models", {})
             new_raw["auxiliary_models"]["embedding_model_path"] = _rag_embedding_field.value.strip()
@@ -64,10 +77,44 @@ def build_settings_panel(page: Any, pubsub: Any) -> Any:
             new_raw["auxiliary_models"]["embedding_device"] = _rag_embed_device.value
             new_raw["auxiliary_models"]["reranker_device"] = _rag_rerank_device.value
 
+            # 更新 MCP 服务器列表
+            new_raw["mcp_servers"] = {}
+            for i, entry in enumerate(mcp_addr_list):
+                addr = entry["field"].value.strip()
+                if not addr:
+                    continue
+                srv_name = f"mcp_server_{i}"
+                if addr.startswith("http://") or addr.startswith("https://"):
+                    new_raw["mcp_servers"][srv_name] = {"transport": "sse", "url": addr}
+                else:
+                    parts = addr.split()
+                    new_raw["mcp_servers"][srv_name] = {
+                        "transport": "stdio",
+                        "command": parts[0],
+                        "args": parts[1:] if len(parts) > 1 else [],
+                        "env": {},
+                    }
+            # 同步更新各 agent 的 mcp_servers 引用
+            srv_names = list(new_raw["mcp_servers"].keys())
+            agents_raw = new_raw.get("agents", {})
+            for agent_key in ("main_agent", "supervisor_agent", "executor_agent"):
+                if agent_key in agents_raw:
+                    agents_raw[agent_key]["mcp_servers"] = list(srv_names)
+
             # 写回主 config
             save_config(new_raw, cfg.source_path)
             reset_persona_cache()
             llm_clear_cache()
+            # 重新初始化 TTS 引擎
+            try:
+                from nekoagent.tts.engine import init_engine
+                tts_cfg = new_raw.get("tts", {})
+                init_engine(
+                    model_path=tts_cfg.get("model_path", ""),
+                    device=tts_cfg.get("device", "cpu"),
+                )
+            except Exception:
+                pass
 
             # ---- 2. persona yaml ----
             persona_dict = persona.model_dump()
@@ -87,7 +134,7 @@ def build_settings_panel(page: Any, pubsub: Any) -> Any:
     def _agent_section(label, profile_name) -> list:
         fields = []
         url = ft.TextField(
-            label="LLM URL",
+            label="LLM API",
             value=cfg.llm_profiles.get(profile_name, getattr(cfg.llm_profiles, "_", None)).base_url if cfg.llm_profiles.get(profile_name) else "",
             border_color=ft.Colors.PINK_200, focused_border_color=ft.Colors.PINK_400,
             width=420,
@@ -144,7 +191,7 @@ def build_settings_panel(page: Any, pubsub: Any) -> Any:
     _persona_prompt_field = ft.TextField(
         label="人物设定 System Prompt",
         value=persona.system_prompt,
-        multiline=True, min_lines=4, max_lines=12,
+        multiline=True, min_lines=6, max_lines=16,
         border_color=ft.Colors.PINK_200, focused_border_color=ft.Colors.PINK_400,
         width=420,
     )
@@ -180,40 +227,46 @@ def build_settings_panel(page: Any, pubsub: Any) -> Any:
     )
 
     from nekoagent.ui.flet_shell.dialogs import pick_model_directory, update_field_from_dialog as _ufd
-    _rag_embedding_row = ft.Row(controls=[_rag_embedding_field,
+    _rag_embedding_row = ft.Container(
+        width=500, 
+        content=ft.Row(controls=[_rag_embedding_field,
         ft.IconButton(icon=ft.Icons.FOLDER_OPEN, icon_color=ft.Colors.PINK_400, tooltip="选择文件夹",
-                       on_click=lambda e: (_ufd(_rag_embedding_field, pick_model_directory()), page.update() if _rag_embedding_field.value else None))])
-    _rag_reranker_row = ft.Row(controls=[_rag_reranker_field,
-        ft.IconButton(icon=ft.Icons.FOLDER_OPEN, icon_color=ft.Colors.PINK_400, tooltip="选择文件夹",
-                       on_click=lambda e: (_ufd(_rag_reranker_field, pick_model_directory()), page.update() if _rag_reranker_field.value else None))])
+                       on_click=lambda e: (_ufd(_rag_embedding_field, pick_model_directory()), page.update() if _rag_embedding_field.value else None))]),
+    )
+    _rag_reranker_row = ft.Container(
+        width=500, 
+        content=ft.Row(
+        controls=[_rag_reranker_field,
+            ft.IconButton(icon=ft.Icons.FOLDER_OPEN, icon_color=ft.Colors.PINK_400, tooltip="选择文件夹",
+            on_click=lambda e: (_ufd(_rag_reranker_field, pick_model_directory()), page.update() if _rag_reranker_field.value else None))],
+            alignment=ft.MainAxisAlignment.CENTER,
+        ),
+    )
 
     _rag_embed_device = ft.Dropdown(
         label="Embedding 设备",
         options=[ft.dropdown.Option("cpu", "CPU"), ft.dropdown.Option("cuda", "CUDA")],
         value=cfg.auxiliary_models.embedding_device,
-        width=200, border_color=ft.Colors.PINK_200,
+        width=250, border_color=ft.Colors.PINK_200,
     )
     _rag_rerank_device = ft.Dropdown(
         label="Reranker 设备",
         options=[ft.dropdown.Option("cpu", "CPU"), ft.dropdown.Option("cuda", "CUDA")],
         value=cfg.auxiliary_models.reranker_device,
-        width=200, border_color=ft.Colors.PINK_200,
+        width=250, border_color=ft.Colors.PINK_200,
     )
     # RAG 库列表
     # ======== MCP 服务器地址列表（可编辑） ========
     mcp_addr_list: list[dict] = []  # 每项 {"field": TextField, "result": Text}
-    mcp_list_container = ft.Column(spacing=6, horizontal_alignment=ft.CrossAxisAlignment.CENTER)
+    mcp_list = ft.Column(spacing=20, horizontal_alignment=ft.CrossAxisAlignment.CENTER)
 
     def _rebuild_mcp_list():
-        mcp_list_container.controls.clear()
-        # 从 config 读取已有服务器地址
-        if not mcp_addr_list:
-            existing = []
-            for srv_name, srv_cfg in cfg.mcp_servers.items():
-                addr = srv_cfg.command or ""
-                if addr:
-                    existing.append(addr)
-            for addr in existing:
+        mcp_list.controls.clear()
+        mcp_addr_list.clear()
+        # 从 config 读取已有服务器地址（支持 command 和 url 字段）
+        for srv_name, srv_cfg in cfg.mcp_servers.items():
+            addr = srv_cfg.url or srv_cfg.command or ""
+            if addr:
                 _add_mcp_entry(addr)
         if not mcp_addr_list:
             _add_mcp_entry("")
@@ -255,7 +308,7 @@ def build_settings_panel(page: Any, pubsub: Any) -> Any:
         row = ft.Row(controls=[field, ping_btn, del_btn, result_text], alignment=ft.MainAxisAlignment.CENTER,
                       vertical_alignment=ft.CrossAxisAlignment.CENTER)
         mcp_addr_list.append({"field": field, "result": result_text})
-        mcp_list_container.controls.append(row)
+        mcp_list.controls.append(row)
         page.update()
 
     def _remove_mcp_entry(idx: int):
@@ -268,6 +321,11 @@ def build_settings_panel(page: Any, pubsub: Any) -> Any:
                                  style=ft.ButtonStyle(shape=ft.RoundedRectangleBorder(radius=8)))
 
     _rebuild_mcp_list()
+
+    mcp_list_container = ft.Container(
+        width=500,  # 固定宽度
+        content=mcp_list,
+    )
 
     mcp_page = ft.Column(scroll=ft.ScrollMode.ALWAYS, horizontal_alignment=ft.CrossAxisAlignment.CENTER, spacing=10, controls=[
         ft.Text("MCP 服务器配置", size=16, weight=ft.FontWeight.BOLD, color=ft.Colors.PINK_800),
@@ -379,6 +437,239 @@ def build_settings_panel(page: Any, pubsub: Any) -> Any:
         ],
     )
 
+    # ======== TTS 配置页 ========
+    tts_raw = cfg.raw.get("tts", {})
+    _tts_model_field = ft.TextField(
+        label="模型路径", expand=True, read_only=True,
+        value=tts_raw.get("model_path", ""),
+        border_color=ft.Colors.PINK_200, focused_border_color=ft.Colors.PINK_400,
+    )
+    from nekoagent.ui.flet_shell.dialogs import pick_model_directory as _pmd, pick_audio_file as _paf
+    _tts_model_row = ft.Container(
+        width=500,
+        content=ft.Row(controls=[_tts_model_field,
+            ft.IconButton(icon=ft.Icons.FOLDER_OPEN, icon_color=ft.Colors.PINK_400, tooltip="选择模型目录",
+                          on_click=lambda e: (_ufd(_tts_model_field, _pmd()), page.update() if _tts_model_field.value else None))]),
+    )
+    _tts_device = ft.Dropdown(
+        label="设备",
+        options=[ft.dropdown.Option("cpu", "CPU"), ft.dropdown.Option("cuda", "CUDA")],
+        value=tts_raw.get("device", "cpu"),
+        width=250, border_color=ft.Colors.PINK_200,
+    )
+    # 克隆声音创建
+    _clone_audio_field = ft.TextField(
+        label="参考音频", expand=True, read_only=True,
+        value="", border_color=ft.Colors.PINK_200, focused_border_color=ft.Colors.PINK_400,
+    )
+    _clone_audio_row = ft.Container(
+        width=500,
+        content=ft.Row(controls=[_clone_audio_field,
+            ft.IconButton(icon=ft.Icons.AUDIO_FILE, icon_color=ft.Colors.PINK_400, tooltip="选择音频",
+                          on_click=lambda e: (_ufd(_clone_audio_field, _paf()), page.update() if _clone_audio_field.value else None))]),
+    )
+    _clone_text_field = ft.TextField(
+        label="参考文本（音频中朗读的内容）", multiline=True, min_lines=1, max_lines=4,
+        value="", border_color=ft.Colors.PINK_200, focused_border_color=ft.Colors.PINK_400, width=500,
+    )
+    _clone_name_field = ft.TextField(
+        label="克隆声音名称", value="",
+        border_color=ft.Colors.PINK_200, focused_border_color=ft.Colors.PINK_400, width=500,
+    )
+    _clone_status = ft.Text("", size=11, color=ft.Colors.GREY_700)
+
+    def _do_clone(_e):
+        audio = _clone_audio_field.value.strip()
+        text = _clone_text_field.value.strip()
+        name = _clone_name_field.value.strip()
+        if not audio or not text or not name:
+            _clone_status.value = "❌ 请填写音频、文本和名称"
+            page.update()
+            return
+        try:
+            # 使用当前表单中的模型路径和设备重新初始化引擎（无需先保存配置）
+            from nekoagent.tts.engine import init_engine, get_engine
+            model_path = _tts_model_field.value.strip()
+            device = _tts_device.value
+            engine = init_engine(model_path=model_path, device=device)
+            ok = engine.clone_voice(audio, text, name)
+            _clone_status.value = "✅ 克隆成功！" if ok else "❌ 克隆失败（检查模型路径和日志）"
+            if ok:
+                # 克隆成功后自动激活并写入配置
+                import copy
+                raw = copy.deepcopy(get_config().raw)
+                raw.setdefault("tts", {})
+                raw["tts"]["model_path"] = model_path
+                raw["tts"]["device"] = device
+                raw["tts"]["active_clone"] = name
+                from nekoagent.config.writeback import save_config
+                save_config(raw, get_config().source_path)
+                # 从 yaml 重新初始化引擎
+                _cfg = get_config()
+                _tts = _cfg.raw.get("tts", {})
+                from nekoagent.tts.engine import init_engine
+                init_engine(
+                    model_path=_tts.get("model_path", ""),
+                    device=_tts.get("device", "cpu"),
+                    active_clone=_tts.get("active_clone", None),
+                )
+                # 同步设置表单字段
+                _tts_model_field.value = model_path
+                _tts_device.value = device
+                _clone_audio_field.value = ""
+                _clone_text_field.value = ""
+                _clone_name_field.value = ""
+                _refresh_clone_list()
+            page.update()
+        except Exception as exc:
+            _clone_status.value = f"❌ {exc}"
+            page.update()
+
+    # 克隆声音列表
+    _clone_list_container = ft.Column(spacing=8)
+    _active_clone_label = ft.Text("当前未激活", size=12, color=ft.Colors.GREY_600, italic=True)
+
+    def _refresh_clone_list():
+        _clone_list_container.controls.clear()
+        try:
+            from nekoagent.tts.engine import get_engine
+            engine = get_engine()
+            clones = engine.list_clones()
+            active = engine.get_active_clone()
+            active_name = active["name"] if active else None
+        except Exception:
+            clones = []
+            active_name = None
+        if active_name:
+            _active_clone_label.value = f"已激活: {active_name}"
+        else:
+            _active_clone_label.value = "当前未激活"
+        if not clones:
+            _clone_list_container.controls.append(
+                ft.Container(
+                    content=ft.Text("暂无克隆声音", size=12, italic=True, color=ft.Colors.GREY_600),
+                    padding=10, border_radius=8,
+                    bgcolor=ft.Colors.with_opacity(0.4, ft.Colors.WHITE),
+                )
+            )
+        else:
+            for c in clones:
+                cname = c.get("name", "未知")
+                is_active = cname == active_name
+
+                def _handle_activate(clone_name):
+                    try:
+                        _log.info("TTS 激活克隆声音: %s", clone_name)
+                        import copy
+                        raw = copy.deepcopy(get_config().raw)
+                        raw.setdefault("tts", {})
+                        raw["tts"]["active_clone"] = clone_name
+                        from nekoagent.config.writeback import save_config
+                        save_config(raw, get_config().source_path)
+                        _cfg = get_config()
+                        _tts = _cfg.raw.get("tts", {})
+                        from nekoagent.tts.engine import init_engine
+                        engine = init_engine(
+                            model_path=_tts.get("model_path", ""),
+                            device=_tts.get("device", "cpu"),
+                            active_clone=_tts.get("active_clone", None),
+                        )
+                        _log.info("TTS 引擎已重新初始化, active_clone=%s", engine.get_active_clone())
+                        _tts_model_field.value = _tts.get("model_path", "")
+                        _tts_device.value = _tts.get("device", "cpu")
+                        _refresh_clone_list()
+                    except Exception as exc:
+                        _log.error("TTS 激活失败: %s", exc)
+
+                def _handle_delete(clone_name):
+                    try:
+                        import json, os
+                        from nekoagent.tts.engine import _VOICE_CLONE_DIR, _CLONE_INDEX_FILE, get_engine
+                        engine = get_engine()
+                        engine._clones.pop(clone_name, None)
+                        engine._save_clone_index()
+                        clone_path = _VOICE_CLONE_DIR / f"{clone_name}.pt"
+                        if clone_path.exists():
+                            os.remove(str(clone_path))
+                        if engine._active_clone_name == clone_name:
+                            engine._active_clone_name = None
+                            import copy
+                            raw = copy.deepcopy(get_config().raw)
+                            raw.setdefault("tts", {})
+                            raw["tts"]["active_clone"] = ""
+                            from nekoagent.config.writeback import save_config
+                            save_config(raw, get_config().source_path)
+                            _cfg = get_config()
+                            _tts = _cfg.raw.get("tts", {})
+                            from nekoagent.tts.engine import init_engine
+                            init_engine(
+                                model_path=_tts.get("model_path", ""),
+                                device=_tts.get("device", "cpu"),
+                                active_clone=None,
+                            )
+                        _refresh_clone_list()
+                        page.update()
+                    except Exception:
+                        pass
+
+                act_btn = ft.ElevatedButton(
+                    "已激活" if is_active else "激活",
+                    icon=ft.Icons.CHECK_CIRCLE if is_active else ft.Icons.PLAY_ARROW,
+                    on_click=lambda e, name=cname: _handle_activate(name),
+                    bgcolor=ft.Colors.RED_400 if is_active else ft.Colors.PINK_400,
+                    color=ft.Colors.WHITE,
+                    disabled=is_active,
+                    style=ft.ButtonStyle(shape=ft.RoundedRectangleBorder(radius=8)),
+                )
+                card = ft.Container(
+                    padding=8, border_radius=10,
+                    bgcolor=ft.Colors.with_opacity(0.85, ft.Colors.RED_50) if is_active else ft.Colors.with_opacity(0.7, ft.Colors.WHITE),
+                    border=border_all(1, ft.Colors.RED_300) if is_active else border_all(1, ft.Colors.with_opacity(0.2, ft.Colors.PINK_100)),
+                    content=ft.Row(controls=[
+                        ft.Icon(ft.Icons.CHECK_CIRCLE, color=ft.Colors.RED_500, size=18) if is_active else ft.Icon(ft.Icons.RADIO_BUTTON_UNCHECKED, color=ft.Colors.GREY_400, size=18),
+                        ft.Text(cname, size=13, weight=ft.FontWeight.BOLD,
+                                color=ft.Colors.RED_800 if is_active else ft.Colors.PINK_800,
+                                expand=True),
+                        act_btn,
+                        ft.IconButton(icon=ft.Icons.DELETE, icon_size=18, icon_color=ft.Colors.RED_400,
+                                      tooltip="删除", on_click=lambda e, name=cname: _handle_delete(name)),
+                    ]),
+                )
+                _clone_list_container.controls.append(card)
+        page.update()
+
+    _refresh_clone_list()
+
+    tts_page = ft.Column(
+        scroll=ft.ScrollMode.ALWAYS,
+        horizontal_alignment=ft.CrossAxisAlignment.CENTER,
+        controls=[
+            ft.Text("TTS 配置", size=16, weight=ft.FontWeight.BOLD, color=ft.Colors.PINK_800),
+            ft.Divider(color=ft.Colors.with_opacity(0.2, ft.Colors.PINK_200)),
+            ft.Text("模型配置", size=14, weight=ft.FontWeight.BOLD, color=ft.Colors.PINK_800),
+            _tts_model_row,
+            _tts_device,
+            ft.Divider(color=ft.Colors.with_opacity(0.2, ft.Colors.PINK_200)),
+            ft.Text("克隆声音", size=14, weight=ft.FontWeight.BOLD, color=ft.Colors.PINK_800),
+            _clone_audio_row,
+            _clone_text_field,
+            _clone_name_field,
+            ft.Row(controls=[
+                ft.ElevatedButton("开始克隆", icon=ft.Icons.MIC, on_click=_do_clone,
+                                  bgcolor=ft.Colors.PINK_400, color=ft.Colors.WHITE,
+                                  style=ft.ButtonStyle(shape=ft.RoundedRectangleBorder(radius=8))),
+                _clone_status,
+            ], alignment=ft.MainAxisAlignment.CENTER),
+            ft.Divider(color=ft.Colors.with_opacity(0.2, ft.Colors.PINK_200)),
+            ft.Text("克隆声音列表", size=14, weight=ft.FontWeight.BOLD, color=ft.Colors.PINK_800),
+            _active_clone_label,
+            _clone_list_container,
+            ft.ElevatedButton("刷新列表", icon=ft.Icons.REFRESH, on_click=lambda e: _refresh_clone_list(),
+                              bgcolor=ft.Colors.with_opacity(0.5, ft.Colors.PINK_100), color=ft.Colors.PINK_800,
+                              style=ft.ButtonStyle(shape=ft.RoundedRectangleBorder(radius=8))),
+        ],
+    )
+
     # 子页面映射
     sub_pages = {
         "角色设置": persona_page,
@@ -386,6 +677,7 @@ def build_settings_panel(page: Any, pubsub: Any) -> Any:
         "任务主管Agent": supervisor_page,
         "执行子Agent": executor_page,
         "总结用Agent": summary_page,
+        "TTS设置": tts_page,
         "RAG配置": rag_page,
         "MCP服务器": mcp_page,
     }

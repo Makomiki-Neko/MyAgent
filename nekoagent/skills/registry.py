@@ -1,20 +1,15 @@
 """Skill registry：启动期扫描 skills_dir 仅登记，运行期按需懒加载。
 
-Skill YAML schema（与样例一致）：
-```yaml
-name: <skill-name>
-description: <skill 用途>
-type: prompt         # prompt | tool_alias
-system_prompt: |
-  <加载到子 Agent 上下文的提示>
-tools: [<server.tool>]  # 可选；仅 type=tool_alias 时引用 MCP 工具
-```
+支持两种格式：
+- .yaml（标准 schema：name / description / system_prompt / tools）
+- .md（YAML front matter + markdown 正文，正文作为 system_prompt）
 
 隔离：SkillRegistry 单例持有扫描结果；具体加载呈单次（任务内缓存由 supervisor/executor 自行控制是否复用）。
 """
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 from typing import Any
 
@@ -28,16 +23,28 @@ from nekoagent.observability.logging import get_logger
 
 _log = get_logger("skills")
 
+_FRONT_MATCH_RE = re.compile(r'^---\s*\n(.*?)\n---\s*\n', re.DOTALL)
+
+
+def _parse_front_matter(text: str) -> tuple[dict[str, Any], str]:
+    """解析 YAML front matter，返回 (metadata_dict, body_text)。无 front matter 时 metadata 为空 dict。"""
+    m = _FRONT_MATCH_RE.match(text)
+    if not m:
+        return {}, text
+    meta = yaml.safe_load(m.group(1)) or {}
+    body = text[m.end():]
+    return meta, body
+
 
 class SkillRegistry:
     def __init__(self, skills_dir: str) -> None:
         self.skills_dir = skills_dir
-        self._index: dict[str, dict[str, Any]] = {}    # name -> {path, summary, meta}
+        self._index: dict[str, dict[str, Any]] = {}    # name -> {path, summary, format}
         self._cache: dict[str, dict[str, Any]] = {}
 
     # ---------------- 启动期扫描 ----------------
     def scan(self) -> None:
-        """扫 skills 目录，仅登记每个 skill 的 path + description；不读文件内容。"""
+        """扫 skills 目录，仅登记每个 skill 的 path + description；不读文件正文。"""
 
         self._index.clear()
         root = Path(self.skills_dir)
@@ -47,23 +54,34 @@ class SkillRegistry:
         for sub in root.iterdir():
             if not sub.is_dir():
                 continue
-            meta = sub / "skill.yaml"
-            if not meta.exists():
+            # 优先 skill.yaml，其次 skill.md
+            skill_file = sub / "skill.yaml"
+            fmt = "yaml"
+            if not skill_file.exists():
+                skill_file = sub / "skill.md"
+                fmt = "md"
+            if not skill_file.exists():
                 continue
             try:
-                with meta.open("r", encoding="utf-8") as f:
-                    partial = yaml.safe_load(f) or {}
-                name = partial.get("name") or sub.name
-                description = partial.get("description", "")
+                raw = skill_file.read_text(encoding="utf-8")
+                if fmt == "yaml":
+                    partial = yaml.safe_load(raw) or {}
+                    name = partial.get("name") or sub.name
+                    description = partial.get("description", "")
+                else:
+                    meta, _ = _parse_front_matter(raw)
+                    name = meta.get("name") or sub.name
+                    description = meta.get("description", "")
                 self._index[name] = {
-                    "path": str(meta.resolve()),
+                    "path": str(skill_file.resolve()),
                     "summary": description,
-                    "loaded": False,
+                    "format": fmt,
                 }
-            except yaml.YAMLError as exc:
-                _log.warning("skill 文件 YAML 解析失败 %s: %s", meta, exc)
-        _log.info("SkillRegistry 已登记 %d 个 skill：%s",
-                  len(self._index), list(self._index.keys()))
+                _log.info("Skill 识别: name=%s description=%s format=%s path=%s",
+                          name, description, fmt, skill_file.resolve())
+            except (yaml.YAMLError, Exception) as exc:
+                _log.warning("skill 文件解析失败 %s: %s", skill_file, exc)
+        _log.info("Skill 识别完成: 共 %d 个", len(self._index))
 
     def all_skills(self) -> dict[str, dict[str, Any]]:
         return dict(self._index)
@@ -73,24 +91,35 @@ class SkillRegistry:
 
     # ---------------- 运行期懒加载 ----------------
     def load(self, name: str) -> dict[str, Any] | None:
-        """按需读取 skill YAML 全文；缓存复用。"""
+        """按需读取 skill 全文；缓存复用。支持 .yaml 和 .md 格式。"""
 
         if name in self._cache:
             return self._cache[name]
         if name not in self._index:
             _log.warning("请求未登记 skill：%s", name)
             return None
-        meta_path = self._index[name]["path"]
+        entry = self._index[name]
+        meta_path = entry["path"]
+        fmt = entry.get("format", "yaml")
         try:
-            with open(meta_path, "r", encoding="utf-8") as f:
-                content = yaml.safe_load(f) or {}
-        except (OSError, yaml.YAMLError) as exc:
+            raw = Path(meta_path).read_text(encoding="utf-8")
+        except OSError as exc:
             raise SkillError(f"skill '{name}' 文件读取失败：{exc}", cause=exc) from exc
-        # 简易校验：必含 system_prompt
-        if "system_prompt" not in content:
-            raise SkillError(f"skill '{name}' 缺少必填 system_prompt 字段")
-        if "name" not in content:
-            content["name"] = name
+
+        if fmt == "yaml":
+            content = yaml.safe_load(raw) or {}
+            if "system_prompt" not in content:
+                raise SkillError(f"skill '{name}' 缺少必填 system_prompt 字段")
+            if "name" not in content:
+                content["name"] = name
+        else:
+            meta, body = _parse_front_matter(raw)
+            content = dict(meta)
+            content["system_prompt"] = body.strip()
+            if "name" not in content:
+                content["name"] = name
+            if not content.get("system_prompt"):
+                raise SkillError(f"skill '{name}' (.md) 缺少正文内容")
         self._cache[name] = content
         return content
 

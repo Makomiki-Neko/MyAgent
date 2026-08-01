@@ -46,6 +46,36 @@ def run_app() -> None:
     except Exception as exc:
         _log.warning("恢复任务状态失败（忽略）：%s", exc)
 
+    # 初始化 TTS 引擎（同步，仅创建实例不加载模型）
+    try:
+        tts_cfg = cfg.raw.get("tts", {})
+        from nekoagent.tts.engine import init_engine, get_engine
+        init_engine(
+            model_path=tts_cfg.get("model_path", ""),
+            device=tts_cfg.get("device", "cpu"),
+            active_clone=tts_cfg.get("active_clone", None),
+        )
+    except Exception as exc:
+        _log.warning("TTS 引擎初始化失败（可在设置中配置后重试）: %s", exc)
+
+    # 后台异步加载 TTS 模型（不阻塞 UI 启动）
+    def _load_tts_model():
+        import time
+        time.sleep(1)  # 等 UI 就绪
+        try:
+            _log.info("TTS 模型开始后台加载...")
+            engine = get_engine()
+            if engine.model_path:
+                ok = engine.ensure_model()
+                _log.info("TTS 模型后台加载%s", "成功" if ok else "失败（路径不可用）")
+            else:
+                _log.info("TTS 模型未配置路径，跳过加载")
+        except Exception as exc:
+            _log.warning("TTS 模型后台加载异常: %s", exc)
+
+    import threading as _thr
+    _thr.Thread(target=_load_tts_model, daemon=True).start()
+
     def main(page: ft.Page) -> None:
         from nekoagent.ui.flet_shell.panels.chat import build_chat_panel
         from nekoagent.ui.flet_shell.panels.menu import build_menu_panel
@@ -96,6 +126,7 @@ def run_app() -> None:
         page.theme = ft.Theme(
             color_scheme_seed=ft.Colors.PINK,
             color_scheme=ft.ColorScheme(primary=ft.Colors.PINK_400, on_primary=ft.Colors.WHITE, secondary=ft.Colors.PURPLE_300),
+            font_family="Microsoft YaHei",
         )
         page.bgcolor = ft.Colors.with_opacity(0.92, ft.Colors.WHITE)
 
@@ -175,9 +206,11 @@ def run_app() -> None:
 
         _show_chat()
 
-        # ---- 第 2 列：sessions（不变） ----
+        # ---- 第 2 列：sessions ----
         def _on_session_switch(new_session):
             active_session_id["value"] = new_session.session_id
+            _show_chat()
+            _col3_mode = "chat"
             try:
                 pubsub.notify("session_switch", {"session_id": new_session.session_id})
             except Exception:
@@ -245,7 +278,10 @@ def run_app() -> None:
                 expand=True,
                 controls=[
                     page_gradient_background(),
-                    ft.Container(content=body, padding=12, expand=True),
+                    ft.WindowDragArea(
+                        ft.Container(content=body, padding=12, expand=True),
+                        expand=True,
+                    ),
                 ],
             )
         )

@@ -174,6 +174,11 @@ def get_all_search_tools() -> list[tuple[str, Any, str]]:
     return result
 
 
+def get_all_rag_lib_metas() -> dict[str, dict]:
+    """返回所有已注册 RAG 库的元信息 {name: {name, description, ...}}。"""
+    return dict(_registered_libs)
+
+
 def delete_library(lib_name: str) -> bool:
     """删除指定 RAG 库。"""
     lib_dir = _VECTOR_DIR / lib_name
@@ -186,6 +191,19 @@ def delete_library(lib_name: str) -> bool:
     return True
 
 
+def _sanitize_tool_name(name: str) -> str:
+    """将工具名中不合规字符替换为下划线；若结果为空则回退为 hash。"""
+    import hashlib, re
+    sanitized = re.sub(r'[^a-zA-Z0-9_-]', '_', name)
+    sanitized = sanitized.strip('_')
+    if not sanitized or len(sanitized) < 2:
+        suffix = hashlib.md5(name.encode('utf-8')).hexdigest()[:8]
+        sanitized = f"rag_{suffix}"
+    if sanitized != name:
+        _log.info("RAG 工具名 '%s' 已自动修正为 '%s'", name, sanitized)
+    return sanitized
+
+
 def get_rag_tools_for_agent(agent_name: str = "main_agent") -> list:
     """返回 LangChain tool 对象列表。"""
     if not _HAS_LANGCHAIN:
@@ -194,13 +212,14 @@ def get_rag_tools_for_agent(agent_name: str = "main_agent") -> list:
     for name, meta in _registered_libs.items():
         desc = meta.get("description", f"检索 RAG 知识库 {name}")
         top_k = meta.get("top_k", 5)
+        safe_name = _sanitize_tool_name(name)
 
         @_langchain_tool(description=f"检索 RAG 知识库「{name}」：{desc}。输入为搜索关键词。")
         def _search(query: str, _lib_name=name, _tk=top_k) -> str:
             """在知识库中搜索与 query 相关的内容"""
             return _search_library(_lib_name, query, _tk)
 
-        _search.name = f"search_{name}"
+        _search.name = f"search_{safe_name}"
         tools.append(_search)
     return tools
 

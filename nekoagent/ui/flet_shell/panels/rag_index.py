@@ -39,11 +39,14 @@ def build_rag_index_panel(page: Any, pubsub: Any) -> Any:
         border_color=ft.Colors.PINK_200, focused_border_color=ft.Colors.PINK_400,
     )
     from nekoagent.ui.flet_shell.dialogs import pick_document_file, update_field_from_dialog as _ufd
-    file_path_field = ft.Row(controls=[
-        _rag_file_field,
-        ft.IconButton(icon=ft.Icons.FOLDER_OPEN, icon_color=ft.Colors.PINK_400, tooltip="选择文件",
-                       on_click=lambda e: (_ufd(_rag_file_field, pick_document_file()), page.update() if _rag_file_field.value else None)),
-    ])
+    file_path_field = ft.Container(
+        width=500, 
+        content=ft.Row(controls=[
+            _rag_file_field,
+            ft.IconButton(icon=ft.Icons.FOLDER_OPEN, icon_color=ft.Colors.PINK_400, tooltip="选择文件",
+                        on_click=lambda e: (_ufd(_rag_file_field, pick_document_file()), page.update() if _rag_file_field.value else None)),
+        ]),
+    )
     desc_field = ft.TextField(
         label="RAG 库描述（Agent 据此判断何时调用）", hint_text="例如：公司2024年财报数据",
         multiline=True, min_lines=2, max_lines=4, width=500,
