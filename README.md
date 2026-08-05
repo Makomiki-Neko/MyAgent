@@ -37,7 +37,7 @@
 
 **自定义TTS语言合成**
 <img src="./src/TTS.jpg" width="800">
-🔊 <a href="./src/TTS.wav"></a> 点击播放音频
+🔊 <a href="./src/TTS.wav">点击播放音频</a>
 
 </div>
 
