@@ -491,7 +491,7 @@ class MainAgent:
             prompt = (
                 f"任务主管Agent为已完成工作, 返回以下任务执行结果：\n"
                 f"{result_text}\n\n"
-                f"请用你的人设风格向用户呈现这个结果。"
+                f"请用你的人设风格，以向用户呈现这个结果，注意使用MD格式来重新描述上述任务结果。"
             )
             messages = [
                 SystemMessage(content=self._persona_system_prompt()),

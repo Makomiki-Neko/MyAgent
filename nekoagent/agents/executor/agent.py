@@ -61,7 +61,7 @@ class ExecutorAgent:
         except (LLMConfigError, NekoAgentError):
             raise
 
-    def _react_until_done(self, llm, messages: list, max_iterations: int = 5) -> list:
+    def _react_until_done(self, llm, messages: list, max_iterations: int = 2) -> list:
         """ReAct 循环：处理工具调用，直到 LLM 返回非工具调用的最终响应。"""
         from nekoagent.mcp.binding import AgentMCPClient
 

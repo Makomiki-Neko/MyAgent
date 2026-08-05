@@ -24,7 +24,7 @@ _engine_instance: "TTSEngine | None" = None
 
 
 class TTSEngine:
-    def __init__(self, model_path: str = "", device: str = "cpu", active_clone: str | None = None) -> None:
+    def __init__(self, model_path: str = "", device: str = "cuda", active_clone: str | None = None) -> None:
         self.model_path = model_path
         self.device = device
         self._model = None

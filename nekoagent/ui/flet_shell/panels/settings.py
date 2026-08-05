@@ -290,7 +290,7 @@ def build_settings_panel(page: Any, pubsub: Any) -> Any:
                 import httpx
                 r = httpx.get(addr, timeout=5)
                 if r.status_code < 500:
-                    result_text.value = f"✅ 可达（{r.status_code}）"
+                    result_text.value = f"✅ 可达"
                 else:
                     result_text.value = f"❌ 服务端错误（{r.status_code}）"
             except httpx.ConnectError:
