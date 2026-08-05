@@ -33,6 +33,11 @@
 <br>
 <img src="./src/Process.jpg" width="800">
 <img src="./src/End.jpg" width="800">
+<br>
+
+**自定义TTS语言合成**
+<img src="./src/TTS.jpg" width="800">
+🔊 <a href="./src/TTS.wav"></a> 点击播放音频
 
 </div>
 
